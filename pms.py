@@ -1,8 +1,9 @@
 from machine import UART, Pin
 from time import sleep
-from ucollections import OrderedDict
+from ucollections import deque
+import uasyncio
 
-DATA_OFFSETS = [
+DATA = [
     "PM1.0",
     "PM2.5",
     "PM10",
@@ -29,15 +30,45 @@ class PMS:
     def __init__(self, uart):
         self.__pms_uart = uart
         
-    def readAll(self):
         
+    async def start(self, buffer_size=10):
         self.__flush_buffer()
+        self.__pms_data = PMS_Data(buffer_size)
+        await self.__stream_read(self.__pms_data)
+    
+    def any(self):
+        return len(self.__pms_data)
+    
+    def read(self):
+        return self.__pms_data.pop()
+        
+    async def __stream_read(self, data):
         raw_data = bytes()
-        while len(raw_data) < 64:
+        while True:
+            await uasyncio.sleep(1.0)
+            raw_data = self.__read(raw_data)
+            found = True
+            while found:
+                found, new_idx = self.__find_frame(raw_data)
+                if found:
+                    frame, new_idx = self.__parse_frame(new_idx, raw_data)
+                    if frame is not None: data.push(frame)
+                raw_data = raw_data[new_idx:]
+            if len(raw_data) >= 288: raw_data = bytes() #incase somehow no frames found for a long time
+            
+    def __read(self, raw_data):
+        while len(raw_data) < 32:
             while self.__pms_uart.any() > 0:
                 raw_data += self.__pms_uart.read(1)
-        frames = self.__find_frames(raw_data)
-        return self.__average_frame(frames)
+        return raw_data
+
+    
+                          
+    def __find_frame(self, raw_data):
+        for i in range(len(raw_data) - 1):
+            if raw_data[i] == START_HIGH and raw_data[i+1] == START_LOW:
+                return True, i
+        return False, 0
     
     def __flush_buffer(self):
         while self.__pms_uart.any() > 0:
@@ -53,10 +84,6 @@ class PMS:
                 frame, newI = self.__parse_frame(raw_data[i:])
                 if frame is not None: frames.append(frame)
             i += 1
-            
-    def test_find_frames(self):
-        data = b'BM\x00\x1c\x00\x02\x00\x03\x00\x04\x00\x02\x00\x03\x00\x04\x02\x5E\x00\xc0\x00\x0f\x00\x02\x00\x00\x00\x00\x97\x00\x02\x85BM\x00\x1c'
-        frames = self.__find_frames(data)
         
     def __average_frame(self, frames):
         average_frame = dict()
@@ -68,29 +95,63 @@ class PMS:
             
         return average_frame
              
-    def __parse_frame(self, raw_data):
-        frame_size = self.__read_2_bytes(raw_data[2], raw_data[3])
-        if frame_size > len(raw_data):
-            print("frame size too small")
-            return None, len(raw_data)
-        frame = dict()
-        sensor_data_end = DATA_OFFSET_START + frame_size - SENSOR_DATA_OFFSET_END # minus 2 for version + error data
-        sum_of_bytes = START_HIGH + START_LOW + raw_data[3]
-        for i in range(DATA_OFFSET_START, sensor_data_end, 2):
-            data_index = (i - DATA_OFFSET_START) // 2
-            frame[DATA_OFFSETS[data_index]] = self.__read_2_bytes(raw_data[i], raw_data[i+1])
-            sum_of_bytes += raw_data[i] + raw_data[i+1]
+    def __parse_frame(self, start_idx, raw_data):
+        if len(raw_data) < 2: return None, start_idx
+        #start bytes
+        pos = start_idx
+        sum_of_bytes = raw_data[pos] + raw_data[pos+1]
+        pos += 2
         
-        position = DATA_OFFSET_START + frame_size
-        version = raw_data[position-4]
-        error = raw_data[position-3]
+        #size bytes
+        frame_size = self.__read_2_bytes(raw_data[pos], raw_data[pos+1])
+        sum_of_bytes += raw_data[pos] + raw_data[pos+1]
+        
+        if frame_size + 4 > len(raw_data): #4: 2 start bytes + 2 check bytes
+            return None, start_idx
+
+        #data bytes
+        frame = dict()
+        sensor_data_end = pos + frame_size - 2 # minus 2 for version + error data
+        pos += 2 # advance pos for size bytes
+        j = 0
+        for i in range(pos, sensor_data_end, 2):
+            frame[DATA[j]] = self.__read_2_bytes(raw_data[i], raw_data[i+1])
+            sum_of_bytes += raw_data[i] + raw_data[i+1]
+            j += 1
+
+        pos = sensor_data_end
+        
+        #version error
+        version = raw_data[pos]
+        error = raw_data[pos+1]
         sum_of_bytes += version + error
-        check_sum = self.__read_2_bytes(raw_data[position-2], raw_data[position-1])
-        if sum_of_bytes == check_sum: return frame, frame_size
-        print("check sum failed")
-        return None, frame_size
+
+        pos += 2
+        
+        #checksum
+        check_sum = self.__read_2_bytes(raw_data[pos], raw_data[pos+1])
+        pos += 2
+        if sum_of_bytes == check_sum:
+            return frame, pos
+        else:
+            print("check sum failed")
+            return None, pos
             
             
     def __read_2_bytes(self, byte_high, byte_low):
         return (byte_high << 8) + byte_low
+    
+class PMS_Data:
+    
+    def __init__(self, buffer_size=10):
+        self.__data_stream = deque((), buffer_size)
+        
+    def push(self, data):
+        self.__data_stream.append(data)
+        
+    def pop(self):
+        return self.__data_stream.popleft()
+    
+    def __len__(self):
+        return len(self.__data_stream)
             
