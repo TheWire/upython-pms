@@ -52,7 +52,10 @@ class PMS:
                 found, new_idx = self.__find_frame(raw_data)
                 if found:
                     frame, new_idx = self.__parse_frame(new_idx, raw_data)
-                    if frame is not None: data.push(frame)
+                    if frame is not None:
+                        data.push(frame)
+                    else:
+                        found = False
                 raw_data = raw_data[new_idx:]
             if len(raw_data) >= 288: raw_data = bytes() #incase somehow no frames found for a long time
             
@@ -96,7 +99,7 @@ class PMS:
         return average_frame
              
     def __parse_frame(self, start_idx, raw_data):
-        if len(raw_data) < 2: return None, start_idx
+        if len(raw_data) < MIN_FRAME_SIZE: return None, start_idx
         #start bytes
         pos = start_idx
         sum_of_bytes = raw_data[pos] + raw_data[pos+1]
@@ -149,9 +152,12 @@ class PMS_Data:
     def push(self, data):
         self.__data_stream.append(data)
         
+        
     def pop(self):
-        return self.__data_stream.popleft()
+        data = self.__data_stream.popleft()
+        return data
     
     def __len__(self):
-        return len(self.__data_stream)
+        length = len(self.__data_stream)
+        return length
             
