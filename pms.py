@@ -23,6 +23,14 @@ START_HIGH = 0x42
 START_LOW = 0x4D
 DATA_OFFSET_START = 4
 SENSOR_DATA_OFFSET_END = 4
+SLEEP_STATE_CMD = 0xE4
+PASSIVE_STATE_CMD = 0xE1
+READ_PASSIVE_CMD = 0xE2
+SLEEP_STATE = 0x00
+WAKEUP_STATE = 0x01
+PASSIVE_STATE = 0x00
+ACTIVE_STATE = 0x01
+
 
    
 class PMS:
@@ -51,7 +59,7 @@ class PMS:
             while found:
                 found, new_idx = self.__find_frame(raw_data)
                 if found:
-                    frame, new_idx = self.__parse_frame(new_idx, raw_data)
+                    frame, new_idx = self.__parse_data_frame(new_idx, raw_data)
                     if frame is not None:
                         data.push(frame)
                     else:
@@ -59,13 +67,52 @@ class PMS:
                 raw_data = raw_data[new_idx:]
             if len(raw_data) >= 288: raw_data = bytes() #incase somehow no frames found for a long time
             
+    def __single_read(self):
+        raw_data = bytes()
+        raw_data = self.__read2(raw_data)
+        print(raw_data)
+            
     def __read(self, raw_data):
         while len(raw_data) < 32:
             while self.__pms_uart.any() > 0:
                 raw_data += self.__pms_uart.read(1)
         return raw_data
-
     
+    def __read2(self, raw_data):
+        i = 0
+        while len(raw_data) < 32 and i < 10:
+            while self.__pms_uart.any() > 0:
+                raw_data += self.__pms_uart.read(1)
+            i += 1
+        return raw_data
+    
+    def passive_mode(self, state):
+        if state:
+            self.__send_command(PASSIVE_STATE_CMD, PASSIVE_STATE)
+        else:
+            self.__send_command(PASSIVE_STATE_CMD, ACTIVE_STATE)
+        sleep(2)
+        self.__single_read()
+    
+    def sleep_mode(self, state):
+        if state:
+            self.__send_command(SLEEP_STATE_CMD, SLEEP_STATE)
+        else:
+            self.__send_command(SLEEP_STATE_CMD, WAKEUP_STATE)
+        sleep(2)
+        self.__single_read()
+    
+    def __send_command(self, command, data):
+        self.__flush_buffer()
+        cmd = [START_HIGH, START_LOW, command, data >> 8, data & 0xFF]
+        check_sum = sum(cmd)
+        cmd.append(check_sum >> 8)
+        cmd.append(check_sum & 0xFF)
+        print(cmd)
+        self.__write(bytes(cmd))
+
+    def __write(self, data):
+        self.__pms_uart.write(data)
                           
     def __find_frame(self, raw_data):
         for i in range(len(raw_data) - 1):
@@ -74,8 +121,7 @@ class PMS:
         return False, 0
     
     def __flush_buffer(self):
-        while self.__pms_uart.any() > 0:
-            self.__pms_uart.read(288)
+        self.__pms_uart.read(288)
             
     def __find_frames(self, raw_data):
         frames = list()
@@ -84,7 +130,7 @@ class PMS:
             if len(raw_data) - i < MIN_FRAME_SIZE:
                 return frames
             if raw_data[i] == START_HIGH and raw_data[i+1] == START_LOW:
-                frame, newI = self.__parse_frame(raw_data[i:])
+                frame, newI = self.__parse_data_frame(raw_data[i:])
                 if frame is not None: frames.append(frame)
             i += 1
         
@@ -98,7 +144,7 @@ class PMS:
             
         return average_frame
              
-    def __parse_frame(self, start_idx, raw_data):
+    def __parse_data_frame(self, start_idx, raw_data):
         if len(raw_data) < MIN_FRAME_SIZE: return None, start_idx
         #start bytes
         pos = start_idx
@@ -124,7 +170,7 @@ class PMS:
 
         pos = sensor_data_end
         
-        #version error
+        #version + error
         version = raw_data[pos]
         error = raw_data[pos+1]
         sum_of_bytes += version + error
