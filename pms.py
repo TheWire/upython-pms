@@ -91,7 +91,7 @@ class PMS:
             self.__send_command(PASSIVE_STATE_CMD, PASSIVE_STATE)
         else:
             self.__send_command(PASSIVE_STATE_CMD, ACTIVE_STATE)
-        sleep(2)
+        sleep(5)
         self.__single_read()
     
     def sleep_mode(self, state):
@@ -99,7 +99,7 @@ class PMS:
             self.__send_command(SLEEP_STATE_CMD, SLEEP_STATE)
         else:
             self.__send_command(SLEEP_STATE_CMD, WAKEUP_STATE)
-        sleep(2)
+        sleep(5)
         self.__single_read()
     
     def __send_command(self, command, data):
@@ -133,6 +133,9 @@ class PMS:
                 frame, newI = self.__parse_data_frame(raw_data[i:])
                 if frame is not None: frames.append(frame)
             i += 1
+            
+    def __read_2_bytes(self, byte_high, byte_low):
+        return (byte_high << 8) + byte_low
         
     def __average_frame(self, frames):
         average_frame = dict()
@@ -143,25 +146,34 @@ class PMS:
             average_frame[field] = average / len(frames)
             
         return average_frame
-             
-    def __parse_data_frame(self, start_idx, raw_data):
-        if len(raw_data) < MIN_FRAME_SIZE: return None, start_idx
+    
+    #return frame_size, position after size bytes and check_sum
+    def __parse_frame_start(self, start_idx, raw_data):
+        if len(raw_data) < MIN_FRAME_SIZE: return 0, 0, start_idx
         #start bytes
         pos = start_idx
+        if raw_data[pos] != START_HIGH or raw_data[pos+1] != START_LOW:
+            return 0, 0, pos
+    
         sum_of_bytes = raw_data[pos] + raw_data[pos+1]
         pos += 2
         
         #size bytes
         frame_size = self.__read_2_bytes(raw_data[pos], raw_data[pos+1])
         sum_of_bytes += raw_data[pos] + raw_data[pos+1]
+        pos += 2
         
+        return frame_size, pos, sum_of_bytes
+             
+    def __parse_data_frame(self, start_idx, raw_data):
+        frame_size, pos, sum_of_bytes = self.__parse_frame_start(start_idx, raw_data)
+        if frame_size == 0: return None, pos
         if frame_size + 4 > len(raw_data): #4: 2 start bytes + 2 check bytes
             return None, start_idx
-
         #data bytes
         frame = dict()
-        sensor_data_end = pos + frame_size - 2 # minus 2 for version + error data
-        pos += 2 # advance pos for size bytes
+        sensor_data_end = pos + frame_size - 4 #4 = minus 2 size bytes, version and error bytes
+
         j = 0
         for i in range(pos, sensor_data_end, 2):
             frame[DATA[j]] = self.__read_2_bytes(raw_data[i], raw_data[i+1])
@@ -178,17 +190,21 @@ class PMS:
         pos += 2
         
         #checksum
+        is_valid, pos = self.__parse_check_sum(pos, sum_of_bytes, raw_data)
+        if is_valid: return frame, pos
+        None, pos
+            
+    
+    #return if frame is valid and new position
+    def __parse_check_sum(self, pos, sum_of_bytes, raw_data):
+        #checksum
         check_sum = self.__read_2_bytes(raw_data[pos], raw_data[pos+1])
         pos += 2
         if sum_of_bytes == check_sum:
-            return frame, pos
+            return True, pos
         else:
             print("check sum failed")
-            return None, pos
-            
-            
-    def __read_2_bytes(self, byte_high, byte_low):
-        return (byte_high << 8) + byte_low
+            return False, pos
     
 class PMS_Data:
     
