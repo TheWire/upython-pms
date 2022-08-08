@@ -25,7 +25,7 @@ DATA_OFFSET_START = 4
 SENSOR_DATA_OFFSET_END = 4
 SLEEP_STATE_CMD = 0xE4
 PASSIVE_STATE_CMD = 0xE1
-READ_PASSIVE_CMD = 0xE2
+PASSIVE_READ_CMD = 0xE2
 SLEEP_STATE = 0x00
 WAKEUP_STATE = 0x01
 PASSIVE_STATE = 0x00
@@ -39,26 +39,41 @@ class PMS:
         self.__pms_uart = uart
         self.sleep_mode(False)
         self.passive_mode(True)
+        self.streaming = False
               
     async def start(self, buffer_size=10):
+        if self.streaming:
+            raise PMS_Exception("Already stream reading data")
         self.__flush_buffer()
-        self.__pms_data = PMS_Data(buffer_size)
         if self.__sleep:
             self.sleep_mode(False)
         if self.__passive:
             self.passive_mode(False)
-        self.__stream_task = uasyncio.create_task(self.__stream_read(self.__pms_data))
+        data = PMS_Data(buffer_size)
+        self.__stream_task = uasyncio.create_task(self.__stream_read(data))
+        self.streaming = True
+        return data
         
     def stop(self):
         self.__stream_task.cancel()
+        self.streaming = False
         self.passive_mode(True)
         self.__flush_buffer()
     
-    def any(self):
-        return len(self.__pms_data)
-    
+    #read data in passive mode returns None if no data can be read
     def read(self):
-        return self.__pms_data.pop()
+        if self.streaming:
+            raise PMS_Exception("Cannot passive read when streaming")
+        self.__flush_buffer()
+        self.__send_command(PASSIVE_READ_CMD, 0x00)
+        sleep_ms(50)
+        raw_data = bytes()
+        raw_data = self.__read(32, raw_data)
+        found, start_idx = self.__find_frame(raw_data)
+        if found:
+            frame, _ = self.__parse_data_frame(start_idx, raw_data)
+        if found: return frame
+        return None
         
     async def __stream_read(self, data):
         raw_data = bytes()
@@ -71,7 +86,7 @@ class PMS:
                 if found:
                     frame, new_idx = self.__parse_data_frame(new_idx, raw_data)
                     if frame is not None:
-                        data.push(frame)
+                        data.write(frame)
                     else:
                         found = False
                 raw_data = raw_data[new_idx:]
@@ -270,11 +285,13 @@ class PMS_Data:
     def __init__(self, buffer_size=10):
         self.__data_stream = deque((), buffer_size)
         
-    def push(self, data):
+    def write(self, data):
         self.__data_stream.append(data)
+    
+    def any(self):
+        return len(self)
         
-        
-    def pop(self):
+    def read(self):
         data = self.__data_stream.popleft()
         return data
     
