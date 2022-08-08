@@ -1,5 +1,5 @@
 from machine import UART, Pin
-from time import sleep
+from time import sleep, sleep_ms
 from ucollections import deque
 import uasyncio
 
@@ -54,7 +54,7 @@ class PMS:
         raw_data = bytes()
         while True:
             await uasyncio.sleep(1.0)
-            raw_data = self.__read(raw_data)
+            raw_data = await self.__read_async(32, raw_data)
             found = True
             while found:
                 found, new_idx = self.__find_frame(raw_data)
@@ -67,48 +67,80 @@ class PMS:
                 raw_data = raw_data[new_idx:]
             if len(raw_data) >= 288: raw_data = bytes() #incase somehow no frames found for a long time
             
-    def __single_read(self):
-        raw_data = bytes()
-        raw_data = self.__read2(raw_data)
-        print(raw_data)
-            
-    def __read(self, raw_data):
-        while len(raw_data) < 32:
+    async def __read_async(self, size, raw_data, timeout_ms=1000):
+        time = 0
+        while time < timeout_ms:
             while self.__pms_uart.any() > 0:
                 raw_data += self.__pms_uart.read(1)
+            if len(raw_data) >= size: return raw_data
+            await uasynio.sleep_ms(50)
+            time += 50
         return raw_data
     
-    def __read2(self, raw_data):
-        i = 0
-        while len(raw_data) < 32 and i < 10:
+    def __read(self, size, raw_data, timeout_ms=1000):
+        time = 0
+        while time < timeout_ms:
             while self.__pms_uart.any() > 0:
                 raw_data += self.__pms_uart.read(1)
-            i += 1
+            if len(raw_data) >= size: return raw_data
+            sleep_ms(50)
+            time += 50
         return raw_data
     
     def passive_mode(self, state):
         if state:
-            self.__send_command(PASSIVE_STATE_CMD, PASSIVE_STATE)
+            state_byte = PASSIVE_STATE
         else:
-            self.__send_command(PASSIVE_STATE_CMD, ACTIVE_STATE)
-        sleep(5)
-        self.__single_read()
+            state_byte = ACTIVE_STATE
+        tries = 0
+        while tries < 5:
+            self.__flush_buffer()
+            self.__send_command(PASSIVE_STATE_CMD, state_byte)
+            sleep_ms(500)
+            raw_data = bytes()
+            raw_data = self.__read(8, raw_data)
+            found, start_idx = self.__find_frame(raw_data)
+            if found:
+                cmd, data_byte, _ = self.__parse_command_response_frame(start_idx, raw_data)
+                if cmd == PASSIVE_STATE_CMD and data_byte == state_byte:
+                    self.__passive = state
+                    return
+            tries += 1
+        raise PMS_Mode_Exception("Unable to switch mode")
     
     def sleep_mode(self, state):
         if state:
-            self.__send_command(SLEEP_STATE_CMD, SLEEP_STATE)
+            state_byte = SLEEP_STATE
         else:
-            self.__send_command(SLEEP_STATE_CMD, WAKEUP_STATE)
-        sleep(5)
-        self.__single_read()
+            state_byte = WAKEUP_STATE
+        tries = 0
+        while tries < 5:
+            self.__flush_buffer()
+            self.__send_command(SLEEP_STATE_CMD, state_byte)
+            raw_data = bytes()
+            sleep_ms(500)
+            if state_byte == SLEEP_STATE:
+                raw_data = self.__read(8, raw_data)
+                found, start_idx = self.__find_frame(raw_data)
+                if found:
+                    cmd, data_byte, _ = self.__parse_command_response_frame(start_idx, raw_data)
+                    if cmd == SLEEP_STATE_CMD and data_byte == state_byte:
+                        self.__sleep = True
+                        return
+            else:
+                raw_data = self.__read(1, raw_data)
+                if len(raw_data) > 0 and raw_data[0] == 0x00:
+                    self._sleep = False
+                    return
+                
+            tries += 1
+        raise PMS_Mode_Exception("Unable to switch mode")
     
     def __send_command(self, command, data):
-        self.__flush_buffer()
         cmd = [START_HIGH, START_LOW, command, data >> 8, data & 0xFF]
         check_sum = sum(cmd)
         cmd.append(check_sum >> 8)
         cmd.append(check_sum & 0xFF)
-        print(cmd)
         self.__write(bytes(cmd))
 
     def __write(self, data):
@@ -205,6 +237,23 @@ class PMS:
         else:
             print("check sum failed")
             return False, pos
+        
+    def __parse_command_response_frame(self, start_idx, raw_data):
+        frame_size, pos, sum_of_bytes = self.__parse_frame_start(start_idx, raw_data)
+        if frame_size == 0: return None, None, pos
+        if frame_size + 4 > len(raw_data): #4: 2 start bytes + 2 check bytes
+            return None, None, start_idx
+        
+        #data
+        cmd_code = raw_data[pos]
+        data_byte = raw_data[pos+1]
+        sum_of_bytes += cmd_code + data_byte
+        pos += 2
+        
+        #checksum
+        is_valid, pos = self.__parse_check_sum(pos, sum_of_bytes, raw_data)
+        if is_valid: return cmd_code, data_byte, pos
+        0, 0, pos
     
 class PMS_Data:
     
@@ -222,4 +271,9 @@ class PMS_Data:
     def __len__(self):
         length = len(self.__data_stream)
         return length
-            
+
+class PMS_Exception(Exception):
+    pass
+
+class PMS_Mode_Exception(PMS_Exception):
+    pass
