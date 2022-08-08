@@ -37,12 +37,22 @@ class PMS:
     
     def __init__(self, uart):
         self.__pms_uart = uart
-        
-        
+        self.sleep_mode(False)
+        self.passive_mode(True)
+              
     async def start(self, buffer_size=10):
         self.__flush_buffer()
         self.__pms_data = PMS_Data(buffer_size)
-        await self.__stream_read(self.__pms_data)
+        if self.__sleep:
+            self.sleep_mode(False)
+        if self.__passive:
+            self.passive_mode(False)
+        self.__stream_task = uasyncio.create_task(self.__stream_read(self.__pms_data))
+        
+    def stop(self):
+        self.__stream_task.cancel()
+        self.passive_mode(True)
+        self.__flush_buffer()
     
     def any(self):
         return len(self.__pms_data)
@@ -130,7 +140,7 @@ class PMS:
             else:
                 raw_data = self.__read(1, raw_data)
                 if len(raw_data) > 0 and raw_data[0] == 0x00:
-                    self._sleep = False
+                    self.__sleep = False
                     return
                 
             tries += 1
