@@ -49,10 +49,10 @@ class PMS:
             self.sleep_mode(False)
         if self.__passive:
             self.passive_mode(False)
-        data = PMS_Data(buffer_size)
-        self.__stream_task = uasyncio.create_task(self.__stream_read(data))
+        self.data = PMS_Data(buffer_size)
+        self.__stream_task = uasyncio.create_task(self.__stream_read(self.data))
         self.streaming = True
-        return data
+        return self.data
         
     def stop(self):
         self.__stream_task.cancel()
@@ -63,7 +63,9 @@ class PMS:
     #read data in passive mode returns None if no data can be read
     def read(self):
         if self.streaming:
-            raise PMS_Exception("Cannot passive read when streaming")
+            raise PMS_Mode_Exception("Cannot passive read when streaming")
+        if self.__sleep:
+            raise PMS_Mode_Exception("Cannot passive read when sleeping")
         self.__flush_buffer()
         self.__send_command(PASSIVE_READ_CMD, 0x00)
         sleep_ms(50)
