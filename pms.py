@@ -40,6 +40,7 @@ class PMS:
         self.sleep_mode(False)
         self.passive_mode(True)
         self.streaming = False
+        self.subscribers = {}
               
     async def start(self, buffer_size=10):
         if self.streaming:
@@ -49,10 +50,8 @@ class PMS:
             self.sleep_mode(False)
         if self.__passive:
             self.passive_mode(False)
-        self.data = PMS_Data(buffer_size)
-        self.__stream_task = uasyncio.create_task(self.__stream_read(self.data))
+        self.__stream_task = uasyncio.create_task(self.__stream_read())
         self.streaming = True
-        return self.data
         
     def stop(self):
         self.__stream_task.cancel()
@@ -76,11 +75,24 @@ class PMS:
             frame, _ = self.__parse_data_frame(start_idx, raw_data)
         if found: return frame
         return None
+    
+    def subscribe(self, callback):
+        subscription = hash(callback)
+        self.subscribers[subscription] = callback
+        return subscription
+    
+    def unsubscribe(self, subscription):
+        self.susbscripters.remove(subscription)
         
-    async def __stream_read(self, data):
+    def __send_to_subscribers(self, data):
+        for subscriber in self.subscribers.values():
+            subscriber(data)
+        
+        
+    async def __stream_read(self):
         raw_data = bytes()
         while True:
-            await uasyncio.sleep(1.0)
+            await uasyncio.sleep_ms(1000)
             raw_data = await self.__read_async(32, raw_data)
             found = True
             while found:
@@ -88,30 +100,26 @@ class PMS:
                 if found:
                     frame, new_idx = self.__parse_data_frame(new_idx, raw_data)
                     if frame is not None:
-                        data.write(frame)
+                        self.__send_to_subscribers(frame)
                     else:
                         found = False
                 raw_data = raw_data[new_idx:]
             if len(raw_data) >= 288: raw_data = bytes() #incase somehow no frames found for a long time
             
-    async def __read_async(self, size, raw_data, timeout_ms=1000):
-        time = 0
-        while time < timeout_ms:
+    async def __read_async(self, size, raw_data, timeout_ms=100_000):
+        for _ in range(0, timeout_ms, 100):
             while self.__pms_uart.any() > 0:
                 raw_data += self.__pms_uart.read(1)
             if len(raw_data) >= size: return raw_data
-            await uasynio.sleep_ms(50)
-            time += 50
+            await uasyncio.sleep_ms(100)
         return raw_data
     
-    def __read(self, size, raw_data, timeout_ms=1000):
-        time = 0
-        while time < timeout_ms:
+    def __read(self, size, raw_data, timeout=1000_000):
+        for _ in range(0, timeout, 1000):
             while self.__pms_uart.any() > 0:
                 raw_data += self.__pms_uart.read(1)
             if len(raw_data) >= size: return raw_data
-            sleep_ms(50)
-            time += 50
+            sleep_ms(1000)
         return raw_data
     
     def passive_mode(self, state):
@@ -281,25 +289,6 @@ class PMS:
         is_valid, pos = self.__parse_check_sum(pos, sum_of_bytes, raw_data)
         if is_valid: return cmd_code, data_byte, pos
         0, 0, pos
-    
-class PMS_Data:
-    
-    def __init__(self, buffer_size=10):
-        self.__data_stream = deque((), buffer_size)
-        
-    def write(self, data):
-        self.__data_stream.append(data)
-    
-    def any(self):
-        return len(self)
-        
-    def read(self):
-        data = self.__data_stream.popleft()
-        return data
-    
-    def __len__(self):
-        length = len(self.__data_stream)
-        return length
 
 class PMS_Exception(Exception):
     pass
