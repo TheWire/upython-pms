@@ -71,6 +71,6 @@ PM values in g/m3.
 
 PM values calibrated - standard particle calibration fluid 1.
 
-UAE stands for under atmospheric conditions (no calibration?).
+UAE stands for under atmospheric environment (no calibration?).
 
 Other values particle size in um in 0.1L of air.
