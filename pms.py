@@ -4,18 +4,18 @@ from ucollections import deque
 import uasyncio
 
 DATA = [
-    "PM1.0",
-    "PM2.5",
+    "PM1_0",
+    "PM2_5",
     "PM10",
-    "PM1.0_UAE",
-    "PM2.5_UAE",
+    "PM1_0_UAE",
+    "PM2_5_UAE",
     "PM10_UAE",
-    "0.3um",
-    "0.5um",
-    "1.0um",
-    "2.5um",
-    "5.0um",
-    "10um",
+    "um_0_3",
+    "um_0_5",
+    "um_1_0",
+    "um_2_5",
+    "um_5_0",
+    "um_10",
 ]
 
 MIN_FRAME_SIZE = 6
@@ -77,16 +77,22 @@ class PMS:
         return None
     
     def subscribe(self, callback):
-        subscription = hash(callback)
+        subscription = id(callback)
         self.subscribers[subscription] = callback
         return subscription
     
     def unsubscribe(self, subscription):
-        self.susbscripters.remove(subscription)
+        self.subscribers.pop(subscription)
         
     def __send_to_subscribers(self, data):
-        for subscriber in self.subscribers.values():
-            subscriber(data)
+        tasks = []
+        for subscription, callback in self.subscribers.items():
+            if hasattr(callback, "send"):
+                print("async")
+                tasks.append(uasyncio.create_task(callback(data, subscription)))
+            else:
+                callback(data, subscription)
+        uasyncio.gather(tasks)
         
         
     async def __stream_read(self):

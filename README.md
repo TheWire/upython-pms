@@ -54,18 +54,18 @@ sensor.sleep_mode(True)
 ### Data
 python dict values available:
 
-- PM1.0
-- PM2.5
+- PM1_0
+- PM2_5
 - PM10
-- PM1.0_UAE
-- PM2.5_UAE
+- PM1_0_UAE
+- PM2_5_UAE
 - PM10_UAE
-- 0.3um
-- 0.5um
-- 1.0um
-- 2.5um
-- 5.0um
-- 10um
+- um_0_3
+- um_0_5
+- um_1_0
+- um_2_5
+- um_5_0
+- um_10
 
 PM values in g/m3.
 
