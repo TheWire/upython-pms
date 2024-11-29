@@ -88,7 +88,6 @@ class PMS:
         tasks = []
         for subscription, callback in self.subscribers.items():
             if hasattr(callback, "send"):
-                print("async")
                 tasks.append(uasyncio.create_task(callback(data, subscription)))
             else:
                 callback(data, subscription)
@@ -170,7 +169,7 @@ class PMS:
                         return
             else:
                 raw_data = self.__read(1, raw_data)
-                if len(raw_data) > 0 and raw_data[0] == 0x00:
+                if len(raw_data) > 0:
                     self.__sleep = False
                     return
                 
@@ -295,7 +294,12 @@ class PMS:
         is_valid, pos = self.__parse_check_sum(pos, sum_of_bytes, raw_data)
         if is_valid: return cmd_code, data_byte, pos
         0, 0, pos
-
+        
+def _print_bytes(data):
+    for byte in data:
+        print(f"0x{byte:02x}", end=" ")
+    print("")
+        
 class PMS_Exception(Exception):
     pass
 
